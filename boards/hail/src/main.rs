@@ -13,10 +13,15 @@
 #![cfg_attr(not(doc), no_main)]
 #![deny(missing_docs)]
 
+mod custom_fault_policy;
+
 use kernel::capabilities;
 use kernel::component::Component;
+use kernel::deferred_call::DeferredCallClient;
 use kernel::hil;
+use kernel::hil::digest::Digest;
 use kernel::hil::led::LedLow;
+use kernel::hil::public_key_crypto::signature::SignatureVerify;
 use kernel::hil::Controller;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::scheduler::round_robin::RoundRobinSched;
@@ -46,7 +51,12 @@ static mut PROCESS_PRINTER: Option<&'static kernel::process::ProcessPrinterText>
 /// Dummy buffer that causes the linker to reserve enough space for the stack.
 #[no_mangle]
 #[link_section = ".stack_buffer"]
-pub static mut STACK_MEMORY: [u8; 0x1000] = [0; 0x1000];
+pub static mut STACK_MEMORY: [u8; 0x1400] = [0; 0x1400];
+
+#[global_allocator]
+static ALLOCATOR: emballoc::Allocator<16000> = emballoc::Allocator::new();
+
+extern crate alloc;
 
 // Function for the process console to use to reboot the board
 fn reset() -> ! {
@@ -95,6 +105,8 @@ struct Hail {
     dac: &'static capsules_extra::dac::Dac<'static>,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
+    fault_policy: &'static custom_fault_policy::CredentialedFaultPolicy,
+    credentials_checking_policy: &'static kernel::process_checker::rsa::AppCheckerRsa2048,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -134,7 +146,8 @@ impl KernelResources<sam4l::chip::Sam4l<Sam4lDefaultPeripherals>> for Hail {
     type SyscallDriverLookup = Self;
     type SyscallFilter = ();
     type ProcessFault = ();
-    type CredentialsCheckingPolicy = ();
+    type ProcessFaultPolicy = custom_fault_policy::CredentialedFaultPolicy;
+    type CredentialsCheckingPolicy = kernel::process_checker::rsa::AppCheckerRsa2048;
     type Scheduler = RoundRobinSched<'static>;
     type SchedulerTimer = cortexm4::systick::SysTick;
     type WatchDog = ();
@@ -149,8 +162,11 @@ impl KernelResources<sam4l::chip::Sam4l<Sam4lDefaultPeripherals>> for Hail {
     fn process_fault(&self) -> &Self::ProcessFault {
         &()
     }
+    fn process_fault_policy(&self) -> &Self::ProcessFaultPolicy {
+        &self.fault_policy
+    }
     fn credentials_checking_policy(&self) -> &'static Self::CredentialsCheckingPolicy {
-        &()
+        self.credentials_checking_policy
     }
     fn scheduler(&self) -> &Self::Scheduler {
         self.scheduler
@@ -496,9 +512,40 @@ pub unsafe fn main() {
 
     // Configure application fault policy
     let fault_policy = static_init!(
-        kernel::process::ThresholdRestartThenPanicFaultPolicy,
-        kernel::process::ThresholdRestartThenPanicFaultPolicy::new(4)
+        custom_fault_policy::CredentialedFaultPolicy,
+        custom_fault_policy::CredentialedFaultPolicy::new()
     );
+
+    ///////
+    // App Credential Checker
+    ///////
+
+    let sha256_hash_buf = static_init!([u8; 32], [0; 32]);
+    let rsa2048_signature_buf = static_init!([u8; 256], [0; 256]);
+
+    let sha256 = static_init!(
+        capsules_extra::sha256::Sha256Software<'static>,
+        capsules_extra::sha256::Sha256Software::new()
+    );
+    sha256.register();
+
+    let rsa2048verifier = static_init!(
+        rsa_sw::verifier::RsaSignatureVerifier<'static, 32, 256>,
+        rsa_sw::verifier::RsaSignatureVerifier::new()
+    );
+    rsa2048verifier.register();
+
+    let checker = static_init!(
+        kernel::process_checker::rsa::AppCheckerRsa2048,
+        kernel::process_checker::rsa::AppCheckerRsa2048::new(
+            sha256,
+            rsa2048verifier,
+            sha256_hash_buf,
+            rsa2048_signature_buf
+        )
+    );
+    sha256.set_client(checker);
+    rsa2048verifier.set_verify_client(checker);
 
     let scheduler = components::sched::round_robin::RoundRobinComponent::new(&PROCESSES)
         .finalize(components::round_robin_component_static!(NUM_PROCS));
@@ -526,6 +573,8 @@ pub unsafe fn main() {
         dac,
         scheduler,
         systick: cortexm4::systick::SysTick::new(),
+        fault_policy,
+        credentials_checking_policy: checker,
     };
 
     // Setup the UART bus for nRF51 serialization..
@@ -550,8 +599,9 @@ pub unsafe fn main() {
         static _eappmem: u8;
     }
 
-    kernel::process::load_processes(
+    kernel::process::load_and_check_processes(
         board_kernel,
+        &hail,
         chip,
         core::slice::from_raw_parts(
             &_sapps as *const u8,
