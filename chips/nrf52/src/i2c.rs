@@ -133,7 +133,7 @@ impl<'a> TWI<'a> {
                 self.slave_client
                     .map(|client| match self.slave_read_buf.take() {
                         None => {
-                            client.read_expected();
+                            client.write_expected();
                         }
                         Some(_buf) => {}
                     });
