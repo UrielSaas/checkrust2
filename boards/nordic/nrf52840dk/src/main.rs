@@ -76,13 +76,16 @@
 use capsules_core::virtualizers::virtual_alarm::VirtualMuxAlarm;
 use capsules_extra::net::ieee802154::MacAddress;
 use capsules_extra::net::ipv6::ip_utils::IPAddr;
+use kernel::StaticSlice;
 use kernel::component::Component;
+use kernel::core_local::CoreLocal;
 use kernel::hil::led::LedLow;
 use kernel::hil::time::Counter;
 #[allow(unused_imports)]
 use kernel::hil::usb::Client;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::scheduler::round_robin::RoundRobinSched;
+use kernel::utilities::cells::MapCell;
 #[allow(unused_imports)]
 use kernel::{capabilities, create_capability, debug, debug_gpio, debug_verbose, static_init};
 use nrf52840::gpio::Pin;
@@ -141,12 +144,6 @@ const FAULT_RESPONSE: kernel::process::PanicFaultPolicy = kernel::process::Panic
 
 // Number of concurrent processes this platform supports.
 const NUM_PROCS: usize = 8;
-
-static mut PROCESSES: [Option<&'static dyn kernel::process::Process>; NUM_PROCS] =
-    [None; NUM_PROCS];
-
-static mut CHIP: Option<&'static nrf52840::chip::NRF52<Nrf52840DefaultPeripherals>> = None;
-static mut PROCESS_PRINTER: Option<&'static kernel::process::ProcessPrinterText> = None;
 
 /// Dummy buffer that causes the linker to reserve enough space for the stack.
 #[no_mangle]
@@ -365,8 +362,15 @@ pub unsafe fn start() -> (
         UartChannel::Pins(UartPins::new(UART_RTS, UART_TXD, UART_CTS, UART_RXD))
     };
 
+
+    let processes = static_init!(CoreLocal<MapCell<StaticSlice<Option<&'static dyn kernel::process::Process>>>>,
+				 CoreLocal::new_single_core(MapCell::new(StaticSlice::new(static_init!(
+				    [Option<&'static dyn kernel::process::Process>; NUM_PROCS], [None; NUM_PROCS]
+				 )))));
+
+
     // Setup space to store the core kernel data structure.
-    let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(&PROCESSES));
+    let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(processes));
 
     // Create (and save for panic debugging) a chip object to setup low-level
     // resources (e.g. MPU, systick).
@@ -374,7 +378,6 @@ pub unsafe fn start() -> (
         nrf52840::chip::NRF52<Nrf52840DefaultPeripherals>,
         nrf52840::chip::NRF52::new(nrf52840_peripherals)
     );
-    CHIP = Some(chip);
 
     // Do nRF configuration and setup. This is shared code with other nRF-based
     // platforms.
@@ -503,7 +506,6 @@ pub unsafe fn start() -> (
     // Tool for displaying information about processes.
     let process_printer = components::process_printer::ProcessPrinterTextComponent::new()
         .finalize(components::process_printer_text_component_static!());
-    PROCESS_PRINTER = Some(process_printer);
 
     // Virtualize the UART channel for the console and for kernel debug.
     let uart_mux = components::console::UartMuxComponent::new(uart_channel, 115200)
@@ -562,7 +564,7 @@ pub unsafe fn start() -> (
     // IEEE 802.15.4 and UDP
     //--------------------------------------------------------------------------
 
-    let device_id = nrf52840::ficr::FICR_INSTANCE.id();
+    let device_id = nrf52840::ficr::FICR_INSTANCE.with(|f| f.id());
     let device_id_bottom_16: u16 = u16::from_le_bytes([device_id[0], device_id[1]]);
     let (ieee802154_radio, mux_mac) = components::ieee802154::Ieee802154Component::new(
         board_kernel,
@@ -881,7 +883,7 @@ pub unsafe fn start() -> (
     // PLATFORM SETUP, SCHEDULER, AND START KERNEL LOOP
     //--------------------------------------------------------------------------
 
-    let scheduler = components::sched::round_robin::RoundRobinComponent::new(&PROCESSES)
+    let scheduler = components::sched::round_robin::RoundRobinComponent::new(processes)
         .finalize(components::round_robin_component_static!(NUM_PROCS));
 
     let platform = Platform {
@@ -914,8 +916,14 @@ pub unsafe fn start() -> (
     let _ = platform.pconsole.start();
     base_peripherals.adc.calibrate();
 
+    io::DEBUG_INFO.with(|debug_info| debug_info.put(io::DebugInfo {
+	chip,
+	processes,
+	process_printer,
+    }));
+
     debug!("Initialization complete. Entering main loop\r");
-    debug!("{}", &nrf52840::ficr::FICR_INSTANCE);
+    nrf52840::ficr::FICR_INSTANCE.with(|fi| debug!("{}", fi));
 
     // These symbols are defined in the linker script.
     extern "C" {
@@ -929,25 +937,27 @@ pub unsafe fn start() -> (
         static _eappmem: u8;
     }
 
-    kernel::process::load_processes(
-        board_kernel,
-        chip,
-        core::slice::from_raw_parts(
-            core::ptr::addr_of!(_sapps),
-            core::ptr::addr_of!(_eapps) as usize - core::ptr::addr_of!(_sapps) as usize,
-        ),
-        core::slice::from_raw_parts_mut(
-            core::ptr::addr_of_mut!(_sappmem),
-            core::ptr::addr_of!(_eappmem) as usize - core::ptr::addr_of!(_sappmem) as usize,
-        ),
-        &mut PROCESSES,
-        &FAULT_RESPONSE,
-        &process_management_capability,
-    )
-    .unwrap_or_else(|err| {
-        debug!("Error loading processes!");
-        debug!("{:?}", err);
-    });
+    processes.with(|procs| procs.map(|procs|
+	kernel::process::load_processes(
+	    board_kernel,
+	    chip,
+	    core::slice::from_raw_parts(
+		core::ptr::addr_of!(_sapps),
+		core::ptr::addr_of!(_eapps) as usize - core::ptr::addr_of!(_sapps) as usize,
+	    ),
+	    core::slice::from_raw_parts_mut(
+		core::ptr::addr_of_mut!(_sappmem),
+		core::ptr::addr_of!(_eappmem) as usize - core::ptr::addr_of!(_sappmem) as usize,
+	    ),
+	    procs,
+	    &FAULT_RESPONSE,
+	    &process_management_capability,
+	)
+	.unwrap_or_else(|err| {
+	    debug!("Error loading processes!");
+	    debug!("{:?}", err);
+	})
+    ));
 
     (board_kernel, platform, chip)
 }

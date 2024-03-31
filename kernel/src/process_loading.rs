@@ -16,7 +16,7 @@ use core::cell::Cell;
 use core::fmt;
 
 use crate::capabilities::ProcessManagementCapability;
-use crate::config;
+use crate::{config, StaticSlice};
 use crate::debug;
 use crate::deferred_call::{DeferredCall, DeferredCallClient};
 use crate::kernel::Kernel;
@@ -136,28 +136,28 @@ pub fn load_processes<C: Chip>(
     chip: &'static C,
     app_flash: &'static [u8],
     app_memory: &'static mut [u8],
-    mut procs: &'static mut [Option<&'static dyn Process>],
+    procs: &mut StaticSlice<Option<&'static dyn Process>>,
     fault_policy: &'static dyn ProcessFaultPolicy,
     _capability_management: &dyn ProcessManagementCapability,
 ) -> Result<(), ProcessLoadError> {
     load_processes_from_flash(
-        kernel,
-        chip,
-        app_flash,
-        app_memory,
-        &mut procs,
-        fault_policy,
+	kernel,
+	chip,
+	app_flash,
+	app_memory,
+	procs,
+	fault_policy,
     )?;
 
     if config::CONFIG.debug_process_credentials {
-        debug!("Checking: no checking, load and run all processes");
+	debug!("Checking: no checking, load and run all processes");
     }
     for proc in procs.iter() {
-        proc.map(|p| {
-            if config::CONFIG.debug_process_credentials {
-                debug!("Running {}", p.get_process_name());
-            }
-        });
+	proc.map(|p| {
+	    if config::CONFIG.debug_process_credentials {
+		debug!("Running {}", p.get_process_name());
+	    }
+	});
     }
     Ok(())
 }
@@ -186,7 +186,7 @@ fn load_processes_from_flash<C: Chip>(
     chip: &'static C,
     app_flash: &'static [u8],
     app_memory: &'static mut [u8],
-    procs: &mut &'static mut [Option<&'static dyn Process>],
+    procs: &mut StaticSlice<Option<&'static dyn Process>>,
     fault_policy: &'static dyn ProcessFaultPolicy,
 ) -> Result<(), ProcessLoadError> {
     if config::CONFIG.debug_load_processes {

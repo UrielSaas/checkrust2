@@ -4,24 +4,32 @@
 
 use core::fmt::Write;
 use core::panic::PanicInfo;
+use kernel::core_local::CoreLocal;
 use kernel::debug;
 use kernel::debug::IoWrite;
 use kernel::hil::led;
 use kernel::hil::uart;
 use kernel::hil::uart::Configure;
+use kernel::StaticSlice;
+use kernel::utilities::cells::MapCell;
 use nrf52840::gpio::Pin;
+use nrf52840::interrupt_service::Nrf52840DefaultPeripherals;
 use nrf52840::uart::{Uarte, UARTE0_BASE};
 
-use crate::CHIP;
-use crate::PROCESSES;
-use crate::PROCESS_PRINTER;
+pub(crate) struct DebugInfo {
+    pub chip: &'static nrf52840::chip::NRF52<'static, Nrf52840DefaultPeripherals<'static>>,
+    pub processes: &'static CoreLocal<MapCell<StaticSlice<Option<&'static dyn kernel::process::Process>>>>,
+    pub process_printer: &'static kernel::process::ProcessPrinterText,
+}
+
+pub(crate) static mut DEBUG_INFO: CoreLocal<MapCell<DebugInfo>> = unsafe { CoreLocal::new_single_core(MapCell::empty()) };
 
 enum Writer {
     WriterUart(/* initialized */ bool),
     WriterRtt(&'static capsules_extra::segger_rtt::SeggerRttMemory<'static>),
 }
 
-static mut WRITER: Writer = Writer::WriterUart(false);
+static WRITER: CoreLocal<MapCell<Writer>> = unsafe { CoreLocal::new_single_core(MapCell::empty()) };
 
 // Wait a fixed number of cycles to avoid missing characters over the RTT console
 fn wait() {
@@ -34,7 +42,7 @@ fn wait() {
 pub unsafe fn set_rtt_memory(
     rtt_memory: &'static capsules_extra::segger_rtt::SeggerRttMemory<'static>,
 ) {
-    WRITER = Writer::WriterRtt(rtt_memory);
+    WRITER.with(|w| w.put(Writer::WriterRtt(rtt_memory)));
 }
 
 impl Write for Writer {
@@ -101,14 +109,22 @@ pub unsafe fn panic_fmt(pi: &PanicInfo) -> ! {
     // The nRF52840DK LEDs (see back of board)
     let led_kernel_pin = &nrf52840::gpio::GPIOPin::new(Pin::P0_13);
     let led = &mut led::LedLow::new(led_kernel_pin);
-    let writer = &mut WRITER;
-    debug::panic(
-        &mut [led],
-        writer,
-        pi,
-        &cortexm4::support::nop,
-        &PROCESSES,
-        &CHIP,
-        &PROCESS_PRINTER,
-    )
+    let mut writer = WRITER.with(|w| w.take()).unwrap_or(Writer::WriterUart(false));
+
+    DEBUG_INFO.with(|di| {
+	di.map(|debug_info| {
+	    let processes = debug_info.processes.with(|processes|
+		processes.take()
+	    ).unwrap_or(StaticSlice::new(&mut []));
+	    debug::panic(
+		&mut [led],
+		&mut writer,
+		pi,
+		&cortexm4::support::nop,
+		&processes[..],
+		debug_info.chip,
+		debug_info.process_printer,
+	    )
+	}).unwrap_or_else(|| loop {})
+    })
 }
