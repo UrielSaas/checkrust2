@@ -42,16 +42,16 @@ impl<C: Chip> Scheduler<C> for PrioritySched {
         // Iterates in-order through the process array, always running the
         // first process it finds that is ready to run. This enforces the
         // priorities of all processes.
-        let next = self
-            .kernel
-            .get_process_iter()
-            .find(|&proc| proc.ready())
-            .map_or(None, |proc| Some(proc.processid()));
-        self.running.insert(next);
+	self.kernel.processes.with(|processes| {
+	    processes.map(|processes| {
+		let next = processes.iter().filter_map(|&p| p).find(|p| p.ready()).map_or(None, |proc| Some(proc.processid()));
+		self.running.insert(next);
+		next.map_or(SchedulingDecision::TrySleep, |next| {
+		    SchedulingDecision::RunProcess((next, None))
+		})
+	    }).unwrap_or(SchedulingDecision::TrySleep)
+	})
 
-        next.map_or(SchedulingDecision::TrySleep, |next| {
-            SchedulingDecision::RunProcess((next, None))
-        })
     }
 
     unsafe fn continue_process(&self, _: ProcessId, chip: &C) -> bool {
@@ -66,11 +66,12 @@ impl<C: Chip> Scheduler<C> for PrioritySched {
 			if let Some(p) = p {
 			    if p.ready() {
 				return self.running.map_or(false, |running| {
-				    p.processid.index < running.index
+				    p.processid().index < running.index
 				})
 			    }
 			}
 		    }
+		    false
 		}))
 	)
     }
