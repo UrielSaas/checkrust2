@@ -83,6 +83,7 @@ impl<'a> AppCredentialsPolicy<'a> for AppCheckerSimulated<'a> {
     }
 }
 
+#[allow(dead_code)]
 struct AppIdAssignerSimulated {}
 
 impl AppUniqueness for AppIdAssignerSimulated {
