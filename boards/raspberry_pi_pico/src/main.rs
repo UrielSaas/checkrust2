@@ -19,7 +19,9 @@ use components::gpio::GpioComponent;
 use components::led::LedsComponent;
 use enum_primitive::cast::FromPrimitive;
 use kernel::component::Component;
-use kernel::debug;
+use kernel::core_local::CoreLocal;
+use kernel::utilities::cells::MapCell;
+use kernel::{debug, StaticSlice};
 use kernel::hil::gpio::{Configure, FloatingState};
 use kernel::hil::i2c::I2CMaster;
 use kernel::hil::led::LedHigh;
@@ -62,12 +64,6 @@ const FAULT_RESPONSE: kernel::process::PanicFaultPolicy = kernel::process::Panic
 
 // Number of concurrent processes this platform supports.
 const NUM_PROCS: usize = 4;
-
-static mut PROCESSES: [Option<&'static dyn kernel::process::Process>; NUM_PROCS] =
-    [None; NUM_PROCS];
-
-static mut CHIP: Option<&'static Rp2040<Rp2040DefaultPeripherals>> = None;
-static mut PROCESS_PRINTER: Option<&'static kernel::process::ProcessPrinterText> = None;
 
 type TemperatureRp2040Sensor = components::temperature_rp2040::TemperatureRp2040ComponentType<
     capsules_core::virtualizers::virtual_adc::AdcDevice<'static, rp2040::adc::Adc<'static>>,
@@ -290,7 +286,7 @@ pub unsafe fn start() -> (
     peripherals.resets.unreset_all_except(&[], true);
 
     // Set the UART used for panic
-    io::WRITER.set_uart(&peripherals.uart0);
+    io::WRITER.with(|writer| writer.map(|w| w.set_uart(&peripherals.uart0)));
 
     //set RX and TX pins in UART mode
     let gpio_tx = peripherals.pins.get_pin(RPGpio::GPIO0);
@@ -311,9 +307,11 @@ pub unsafe fn start() -> (
         Rp2040::new(peripherals, &peripherals.sio)
     );
 
-    CHIP = Some(chip);
-
-    let board_kernel = static_init!(Kernel, Kernel::new(&PROCESSES));
+    let processes = static_init!(CoreLocal<MapCell<StaticSlice<Option<&'static dyn kernel::process::Process>>>>,
+				 CoreLocal::new_single_core(MapCell::new(StaticSlice::new(static_init!(
+				    [Option<&'static dyn kernel::process::Process>; NUM_PROCS], [None; NUM_PROCS]
+				 )))));
+    let board_kernel = static_init!(Kernel, Kernel::new(processes));
 
     let process_management_capability =
         create_capability!(capabilities::ProcessManagementCapability);
@@ -492,7 +490,6 @@ pub unsafe fn start() -> (
     // PROCESS CONSOLE
     let process_printer = components::process_printer::ProcessPrinterTextComponent::new()
         .finalize(components::process_printer_text_component_static!());
-    PROCESS_PRINTER = Some(process_printer);
 
     let process_console = components::process_console::ProcessConsoleComponent::new(
         board_kernel,
@@ -532,7 +529,7 @@ pub unsafe fn start() -> (
     i2c0.init(10 * 1000);
     i2c0.set_master_client(i2c);
 
-    let scheduler = components::sched::round_robin::RoundRobinComponent::new(&PROCESSES)
+    let scheduler = components::sched::round_robin::RoundRobinComponent::new(processes)
         .finalize(components::round_robin_component_static!(NUM_PROCS));
 
     let raspberry_pi_pico = RaspberryPiPico {
@@ -559,6 +556,12 @@ pub unsafe fn start() -> (
         sysinfo::Platform::Fpga => "FPGA",
     };
 
+    io::DEBUG_INFO.with(|debug_info| debug_info.put(io::DebugInfo {
+	chip,
+	processes,
+	process_printer,
+    }));
+
     debug!(
         "RP2040 Revision {} {}",
         peripherals.sysinfo.get_revision(),
@@ -579,25 +582,26 @@ pub unsafe fn start() -> (
         static _eappmem: u8;
     }
 
-    kernel::process::load_processes(
-        board_kernel,
-        chip,
-        core::slice::from_raw_parts(
-            core::ptr::addr_of!(_sapps),
-            core::ptr::addr_of!(_eapps) as usize - core::ptr::addr_of!(_sapps) as usize,
-        ),
-        core::slice::from_raw_parts_mut(
-            core::ptr::addr_of_mut!(_sappmem),
-            core::ptr::addr_of!(_eappmem) as usize - core::ptr::addr_of!(_sappmem) as usize,
-        ),
-        &mut PROCESSES,
-        &FAULT_RESPONSE,
-        &process_management_capability,
-    )
-    .unwrap_or_else(|err| {
+    processes.with(|procs| procs.map(|procs|
+	kernel::process::load_processes(
+	    board_kernel,
+	    chip,
+	    core::slice::from_raw_parts(
+		core::ptr::addr_of!(_sapps),
+		core::ptr::addr_of!(_eapps) as usize - core::ptr::addr_of!(_sapps) as usize,
+	    ),
+	    core::slice::from_raw_parts_mut(
+		core::ptr::addr_of_mut!(_sappmem),
+		core::ptr::addr_of!(_eappmem) as usize - core::ptr::addr_of!(_sappmem) as usize,
+	    ),
+	    procs,
+	    &FAULT_RESPONSE,
+	    &process_management_capability,
+	).unwrap_or_else(|err| {
         debug!("Error loading processes!");
         debug!("{:?}", err);
-    });
+	})
+    ));
 
     (board_kernel, raspberry_pi_pico, chip)
 }
