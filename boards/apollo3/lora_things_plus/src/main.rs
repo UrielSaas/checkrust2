@@ -132,7 +132,10 @@ struct LoRaThingsPlus {
     console: &'static capsules_core::console::Console<'static>,
     i2c_master: &'static capsules_core::i2c_master::I2CMasterDriver<
         'static,
-        capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, apollo3::iom::Iom<'static>>,
+        capsules_core::virtualizers::virtual_i2c::I2CMultiDevice<
+            'static,
+            apollo3::iom::Iom<'static>,
+        >,
     >,
     external_spi_controller: &'static capsules_core::spi_controller::Spi<
         'static,
