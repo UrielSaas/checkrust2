@@ -358,11 +358,11 @@ where
         alarm: &'a A,
     ) -> BLE<'a, B, A> {
         BLE {
-            radio: radio,
+            radio,
             busy: Cell::new(false),
             app: container,
             kernel_tx: kernel::utilities::cells::TakeCell::new(tx_buf),
-            alarm: alarm,
+            alarm,
             sending_app: OptionalCell::empty(),
             receiving_app: OptionalCell::empty(),
         }
@@ -460,8 +460,10 @@ where
                                 Some(BLEState::Scanning(RadioChannel::AdvertisingChannel37));
                             self.receiving_app.set(processid);
                             let _ = self.radio.set_tx_power(app.tx_power);
-                            self.radio
-                                .receive_advertisement(RadioChannel::AdvertisingChannel37);
+			    if let Some(buf) = self.kernel_tx.take() {
+				self.kernel_tx.replace(self.radio
+				    .receive_advertisement(RadioChannel::AdvertisingChannel37, buf));
+			    }
                         }
                         _ => debug!(
                             "app: {:?} \t invalid state {:?}",
@@ -524,14 +526,14 @@ where
                         self.receiving_app.set(processid);
                         let _ = self.radio.set_tx_power(app.tx_power);
                         self.radio
-                            .receive_advertisement(RadioChannel::AdvertisingChannel38);
+                            .receive_advertisement(RadioChannel::AdvertisingChannel38, buf);
                     }
                     Some(BLEState::Scanning(RadioChannel::AdvertisingChannel38)) => {
                         app.process_status =
                             Some(BLEState::Scanning(RadioChannel::AdvertisingChannel39));
                         self.receiving_app.set(processid);
                         self.radio
-                            .receive_advertisement(RadioChannel::AdvertisingChannel39);
+                            .receive_advertisement(RadioChannel::AdvertisingChannel39, buf);
                     }
                     Some(BLEState::Scanning(RadioChannel::AdvertisingChannel39)) => {
                         self.busy.set(false);
