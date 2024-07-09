@@ -51,8 +51,8 @@ impl BusWidth {
         match self {
             BusWidth::Bits8 => 1,
             BusWidth::Bits16BE | BusWidth::Bits16LE => 2,
-            BusWidth::Bits32BE | BusWidth::Bits32LE => 3,
-            BusWidth::Bits64BE | BusWidth::Bits64LE => 4,
+            BusWidth::Bits32BE | BusWidth::Bits32LE => 4,
+            BusWidth::Bits64BE | BusWidth::Bits64LE => 8,
         }
     }
 }
