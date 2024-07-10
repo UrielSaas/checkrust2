@@ -63,7 +63,7 @@ pub trait Bus<'a> {
     /// If the underlying bus does not support addresses (eg UART)
     /// this function returns ENOSUPPORT
     fn set_addr(&self, addr_width: BusWidth, addr: u64) -> Result<(), ErrorCode>;
-
+    /// We use u64 for addr instead of usize to include 64 bits addresses
     /// Write data items to the previously set address
     ///
     /// data_width specifies the encoding of the data items placed in the buffer
@@ -150,129 +150,68 @@ impl<'a, S: SpiMasterDevice<'a>> SpiMasterBus<'a, S> {
 
 impl<'a, S: SpiMasterDevice<'a>> Bus<'a> for SpiMasterBus<'a, S> {
     fn set_addr(&self, addr_width: BusWidth, addr: u64) -> Result<(), ErrorCode> {
-        match addr_width {
-            BusWidth::Bits8 => self
-                .addr_buffer
-                .take()
-                .map_or(Err(ErrorCode::NOMEM), |buffer| {
+        self.addr_buffer
+            .take()
+            .map_or(Err(ErrorCode::NOMEM), |buffer| {
+                if buffer.len() >= addr_width.width_in_bytes() {
                     self.status.set(BusStatus::SetAddress);
-                    buffer[0] = addr as u8;
-                    if let Err((error, buffer, _)) = self.spi.read_write_bytes(buffer, None, 1) {
+                    match addr_width {
+                        BusWidth::Bits8 => buffer[0] = addr as u8,
+                        BusWidth::Bits16LE => {
+                            buffer[0] = addr as u8;
+                            buffer[1] = (addr >> 8) as u8;
+                        }
+                        BusWidth::Bits16BE => {
+                            buffer[0] = (addr >> 8) as u8;
+                            buffer[1] = addr as u8;
+                        }
+                        BusWidth::Bits32LE => {
+                            buffer[0] = addr as u8;
+                            buffer[1] = (addr >> 8) as u8;
+                            buffer[2] = (addr >> 16) as u8;
+                            buffer[3] = (addr >> 24) as u8;
+                        }
+                        BusWidth::Bits32BE => {
+                            buffer[0] = (addr >> 24) as u8;
+                            buffer[1] = (addr >> 16) as u8;
+                            buffer[2] = (addr >> 8) as u8;
+                            buffer[3] = addr as u8;
+                        }
+                        BusWidth::Bits64LE => {
+                            buffer[0] = addr as u8;
+                            buffer[1] = (addr >> 8) as u8;
+                            buffer[2] = (addr >> 16) as u8;
+                            buffer[3] = (addr >> 24) as u8;
+                            buffer[4] = (addr >> 32) as u8;
+                            buffer[5] = (addr >> 40) as u8;
+                            buffer[6] = (addr >> 48) as u8;
+                            buffer[7] = (addr >> 56) as u8;
+                        }
+                        BusWidth::Bits64BE => {
+                            buffer[0] = (addr >> 56) as u8;
+                            buffer[1] = (addr >> 48) as u8;
+                            buffer[2] = (addr >> 40) as u8;
+                            buffer[3] = (addr >> 32) as u8;
+                            buffer[4] = (addr >> 24) as u8;
+                            buffer[5] = (addr >> 16) as u8;
+                            buffer[6] = (addr >> 8) as u8;
+                            buffer[7] = addr as u8;
+                        }
+                    }
+                    if let Err((error, buffer, _)) =
+                        self.spi
+                            .read_write_bytes(buffer, None, addr_width.width_in_bytes())
+                    {
                         self.status.set(BusStatus::Idle);
                         self.addr_buffer.replace(buffer);
                         Err(error)
                     } else {
                         Ok(())
                     }
-                }),
-            BusWidth::Bits16BE => self
-                .addr_buffer
-                .take()
-                .map_or(Err(ErrorCode::NOMEM), |buffer| {
-                    self.status.set(BusStatus::SetAddress);
-                    buffer[0] = (addr >> 8) as u8;
-                    buffer[1] = (addr & 0xff) as u8;
-                    if let Err((error, buffer, _)) = self.spi.read_write_bytes(buffer, None, 1) {
-                        self.status.set(BusStatus::Idle);
-                        self.addr_buffer.replace(buffer);
-                        Err(error)
-                    } else {
-                        Ok(())
-                    }
-                }),
-            BusWidth::Bits16LE => self
-                .addr_buffer
-                .take()
-                .map_or(Err(ErrorCode::NOMEM), |buffer| {
-                    self.status.set(BusStatus::SetAddress);
-                    buffer[0] = (addr & 0xff) as u8;
-                    buffer[1] = (addr >> 8) as u8;
-
-                    if let Err((error, buffer, _)) = self.spi.read_write_bytes(buffer, None, 1) {
-                        self.status.set(BusStatus::Idle);
-                        self.addr_buffer.replace(buffer);
-                        Err(error)
-                    } else {
-                        Ok(())
-                    }
-                }),
-            BusWidth::Bits32BE => self
-                .addr_buffer
-                .take()
-                .map_or(Err(ErrorCode::NOMEM), |buffer| {
-                    self.status.set(BusStatus::SetAddress);
-                    buffer[0] = (addr >> 24) as u8;
-                    buffer[1] = ((addr & 0x0f00) >> 16) as u8;
-                    buffer[2] = ((addr & 0x00f0) >> 8) as u8;
-                    buffer[3] = (addr & 0x000f) as u8;
-                    if let Err((error, buffer, _)) = self.spi.read_write_bytes(buffer, None, 1) {
-                        self.status.set(BusStatus::Idle);
-                        self.addr_buffer.replace(buffer);
-                        Err(error)
-                    } else {
-                        Ok(())
-                    }
-                }),
-            BusWidth::Bits32LE => self
-                .addr_buffer
-                .take()
-                .map_or(Err(ErrorCode::NOMEM), |buffer| {
-                    self.status.set(BusStatus::SetAddress);
-                    buffer[0] = (addr & 0x000f) as u8;
-                    buffer[1] = ((addr & 0x00f0) >> 8) as u8;
-                    buffer[2] = ((addr & 0x0f00) >> 16) as u8;
-                    buffer[3] = (addr >> 24) as u8;
-                    if let Err((error, buffer, _)) = self.spi.read_write_bytes(buffer, None, 1) {
-                        self.status.set(BusStatus::Idle);
-                        self.addr_buffer.replace(buffer);
-                        Err(error)
-                    } else {
-                        Ok(())
-                    }
-                }),
-            BusWidth::Bits64BE => self
-                .addr_buffer
-                .take()
-                .map_or(Err(ErrorCode::NOMEM), |buffer| {
-                    self.status.set(BusStatus::SetAddress);
-                    buffer[0] = (addr >> 56) as u8;
-                    buffer[1] = ((addr & 0x0f000000) >> 48) as u8;
-                    buffer[2] = ((addr & 0x00f00000) >> 40) as u8;
-                    buffer[3] = ((addr & 0x000f0000) >> 32) as u8;
-                    buffer[4] = ((addr & 0x0000f000) >> 24) as u8;
-                    buffer[5] = ((addr & 0x00000f00) >> 16) as u8;
-                    buffer[6] = ((addr & 0x000000f0) >> 8) as u8;
-                    buffer[7] = (addr & 0x000000f) as u8;
-                    if let Err((error, buffer, _)) = self.spi.read_write_bytes(buffer, None, 1) {
-                        self.status.set(BusStatus::Idle);
-                        self.addr_buffer.replace(buffer);
-                        Err(error)
-                    } else {
-                        Ok(())
-                    }
-                }),
-            BusWidth::Bits64LE => self
-                .addr_buffer
-                .take()
-                .map_or(Err(ErrorCode::NOMEM), |buffer| {
-                    self.status.set(BusStatus::SetAddress);
-                    buffer[0] = (addr & 0x000000f) as u8;
-                    buffer[1] = ((addr & 0x000000f0) >> 8) as u8;
-                    buffer[2] = ((addr & 0x00000f00) >> 16) as u8;
-                    buffer[3] = ((addr & 0x0000f000) >> 24) as u8;
-                    buffer[4] = ((addr & 0x000f0000) >> 32) as u8;
-                    buffer[5] = ((addr & 0x00f00000) >> 40) as u8;
-                    buffer[6] = ((addr & 0x0f000000) >> 48) as u8;
-                    buffer[7] = (addr >> 56) as u8;
-                    if let Err((error, buffer, _)) = self.spi.read_write_bytes(buffer, None, 1) {
-                        self.status.set(BusStatus::Idle);
-                        self.addr_buffer.replace(buffer);
-                        Err(error)
-                    } else {
-                        Ok(())
-                    }
-                }),
-        }
+                } else {
+                    Err(ErrorCode::SIZE)
+                }
+            })
     }
 
     fn write(
@@ -391,24 +330,65 @@ impl<'a, I: I2CDevice> I2CMasterBus<'a, I> {
 
 impl<'a, I: I2CDevice> Bus<'a> for I2CMasterBus<'a, I> {
     fn set_addr(&self, addr_width: BusWidth, addr: u64) -> Result<(), ErrorCode> {
-        match addr_width {
-            BusWidth::Bits8 => self
-                .addr_buffer
-                .take()
-                .map_or(Err(ErrorCode::NOMEM), |buffer| {
-                    buffer[0] = addr as u8;
+        self.addr_buffer
+            .take()
+            .map_or(Err(ErrorCode::NOMEM), |buffer| {
+                if buffer.len() >= addr_width.width_in_bytes() {
                     self.status.set(BusStatus::SetAddress);
-                    match self.i2c.write(buffer, 1) {
+                    match addr_width {
+                        BusWidth::Bits8 => buffer[0] = addr as u8,
+                        BusWidth::Bits16LE => {
+                            buffer[0] = addr as u8;
+                            buffer[1] = (addr >> 8) as u8;
+                        }
+                        BusWidth::Bits16BE => {
+                            buffer[0] = (addr >> 8) as u8;
+                            buffer[1] = addr as u8;
+                        }
+                        BusWidth::Bits32LE => {
+                            buffer[0] = addr as u8;
+                            buffer[1] = (addr >> 8) as u8;
+                            buffer[2] = (addr >> 16) as u8;
+                            buffer[3] = (addr >> 24) as u8;
+                        }
+                        BusWidth::Bits32BE => {
+                            buffer[0] = (addr >> 24) as u8;
+                            buffer[1] = (addr >> 16) as u8;
+                            buffer[2] = (addr >> 8) as u8;
+                            buffer[3] = addr as u8;
+                        }
+                        BusWidth::Bits64LE => {
+                            buffer[0] = addr as u8;
+                            buffer[1] = (addr >> 8) as u8;
+                            buffer[2] = (addr >> 16) as u8;
+                            buffer[3] = (addr >> 24) as u8;
+                            buffer[4] = (addr >> 32) as u8;
+                            buffer[5] = (addr >> 40) as u8;
+                            buffer[6] = (addr >> 48) as u8;
+                            buffer[7] = (addr >> 56) as u8;
+                        }
+                        BusWidth::Bits64BE => {
+                            buffer[0] = (addr >> 56) as u8;
+                            buffer[1] = (addr >> 48) as u8;
+                            buffer[2] = (addr >> 40) as u8;
+                            buffer[3] = (addr >> 32) as u8;
+                            buffer[4] = (addr >> 24) as u8;
+                            buffer[5] = (addr >> 16) as u8;
+                            buffer[6] = (addr >> 8) as u8;
+                            buffer[7] = addr as u8;
+                        }
+                    }
+                    match self.i2c.write(buffer, addr_width.width_in_bytes()) {
                         Ok(()) => Ok(()),
                         Err((error, buffer)) => {
                             self.addr_buffer.replace(buffer);
                             Err(error.into())
                         }
                     }
-                }),
-
-            _ => Err(ErrorCode::NOSUPPORT),
-        }
+                } else {
+                    Err(ErrorCode::SIZE)
+                }
+            })
     }
 
     fn write(
@@ -515,7 +495,7 @@ impl<'a, B: Bus8080<'static>> Bus8080Bus<'a, B> {
 impl<'a, B: Bus8080<'static>> Bus<'a> for Bus8080Bus<'a, B> {
     fn set_addr(&self, addr_width: BusWidth, addr: u64) -> Result<(), ErrorCode> {
         if let Some(bus_width) = Self::to_bus8080_width(addr_width) {
-            self.bus.set_addr(bus_width, addr as u16) // we can use u16 instead of usize because bus8080 has a maximum width of 16 bits
+            self.bus.set_addr(bus_width, addr as u16)
         } else {
             Err(ErrorCode::INVAL)
         }

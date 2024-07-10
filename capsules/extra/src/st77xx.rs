@@ -336,14 +336,14 @@ impl<'a, A: Alarm<'a>, B: Bus<'a>, P: Pin> ST77XX<'a, A, B, P> {
         self.command.set(cmd);
         self.status.set(Status::SendCommand(position, len, repeat));
         self.dc.map(|dc| dc.clear());
-        let _ = self.bus.set_addr(BusWidth::Bits8, cmd.id as usize);
+        let _ = self.bus.set_addr(BusWidth::Bits8, cmd.id as u64);
     }
 
     fn send_command_slice(&self, cmd: &'static Command, len: usize) {
         self.command.set(cmd);
         self.dc.map(|dc| dc.clear());
         self.status.set(Status::SendCommandSlice(len));
-        let _ = self.bus.set_addr(BusWidth::Bits8, cmd.id as usize);
+        let _ = self.bus.set_addr(BusWidth::Bits8, cmd.id as u64);
     }
 
     fn send_parameters(&self, position: usize, len: usize, repeat: usize) {

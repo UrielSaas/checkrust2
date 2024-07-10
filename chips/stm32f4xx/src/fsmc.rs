@@ -315,10 +315,10 @@ impl ClockInterface for FsmcClock<'_> {
 }
 
 impl Bus8080<'static> for Fsmc<'_> {
-    fn set_addr(&self, addr_width: BusWidth, addr: usize) -> Result<(), ErrorCode> {
+    fn set_addr(&self, addr_width: BusWidth, addr: u16) -> Result<(), ErrorCode> {
         match addr_width {
             BusWidth::Bits8 => {
-                self.write_reg(FsmcBanks::Bank1, addr as u16);
+                self.write_reg(FsmcBanks::Bank1, addr);
                 self.deferred_call.set();
                 Ok(())
             }
