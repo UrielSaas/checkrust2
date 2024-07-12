@@ -63,7 +63,7 @@ pub trait Bus<'a> {
     /// If the underlying bus does not support addresses (eg UART)
     /// this function returns ENOSUPPORT
     fn set_addr(&self, addr_width: BusWidth, addr: u64) -> Result<(), ErrorCode>;
-    /// We use u64 for addr instead of usize to include 64 bits addresses
+    /// We use u64 for addr instead of usize to include as the bus library needs to support
     /// Write data items to the previously set address
     ///
     /// data_width specifies the encoding of the data items placed in the buffer

@@ -25,7 +25,7 @@ impl BusWidth {
 pub trait Bus8080<'a> {
     /// Set the address to write to
     fn set_addr(&self, addr_width: BusWidth, addr: u16) -> Result<(), ErrorCode>;
-    /// We can safely use u16 for addr because bus8080 has a maximum width of 16 bits
+    /// We can safely use u16 for addr because bus8080 has a maximum address width of 16 bits
     /// Write data items to the previously set address
     fn write(
         &self,
