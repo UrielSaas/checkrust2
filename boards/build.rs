@@ -24,6 +24,19 @@ fn main() {
         panic!("Boards must provide a `layout.ld` link script file");
     }
 
+    if std::env::var("HOST") != std::env::var("TARGET") {
+        // lld by default uses a default page size to align program sections. Tock
+        // expects that program sections are set back-to-back. `-nmagic` instructs the
+        // linker to not page-align sections.
+        println!("cargo:rustc-link-arg=-nmagic");
+    }
+
+    // Include the folder where the board's Cargo.toml is in the linker file
+    // search path.
+    println!("cargo:rustc-link-arg=-L{}", std::env!("CARGO_MANIFEST_DIR"));
+    // `-Tlayout.ld`: Use the linker script `layout.ld` all boards must provide.
+    println!("cargo:rustc-link-arg=-T{}", LINKER_SCRIPT);
+
     track_linker_script(LINKER_SCRIPT);
 }
 
