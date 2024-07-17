@@ -47,12 +47,12 @@ pub enum DataWidth {
 }
 
 pub struct BusAddr8([u8; 1]);
-struct BusAddr16BE([u8; 2]);
-struct BusAddr16LE([u8; 2]);
-struct BusAddr32BE([u8; 4]);
-struct BusAddr32LE([u8; 4]);
-struct BusAddr64BE([u8; 8]);
-struct BusAddr64LE([u8; 8]);
+pub struct BusAddr16BE([u8; 2]);
+pub struct BusAddr16LE([u8; 2]);
+pub struct BusAddr32BE([u8; 4]);
+pub struct BusAddr32LE([u8; 4]);
+pub struct BusAddr64BE([u8; 8]);
+pub struct BusAddr64LE([u8; 8]);
 
 impl From<BusAddr8> for BusAddr8080 {
     fn from(value: BusAddr8) -> Self {
